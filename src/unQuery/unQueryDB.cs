@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Dynamic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -34,6 +35,33 @@ namespace unQuery
 		/// Executes the batch and returns all rows from the single result set.
 		/// </summary>
 		/// <param name="sql">The SQL statement to execute.</param>
+		/// <param name="options">An optional set of query options</param>
+		public IList<dynamic> GetRows(FormattableString sql, QueryOptions options = null)
+		{
+			var providedArguments = sql.GetArguments();
+			var parameters = CreateParametersObjectFromFormattableString(providedArguments);
+
+			return getRows(string.Format(sql.Format, providedArguments), CommandBehavior.Default, parameters, options);
+		}
+
+		/// <summary>
+		/// Executes the batch and returns all rows from the single result set. Each row is mapped into a new instance of T, mapping the columns
+		/// to properties based on name matching.
+		/// </summary>
+		/// <param name="sql">The SQL statement to execute.</param>
+		/// <param name="options">An optional set of query options</param>
+		public IList<T> GetRows<T>(FormattableString sql, QueryOptions options = null)
+		{
+			var providedArguments = sql.GetArguments();
+			var parameters = CreateParametersObjectFromFormattableString(providedArguments);
+
+			return getRows<T>(string.Format(sql.Format, providedArguments), CommandBehavior.Default, parameters, options);
+		}
+
+		/// <summary>
+		/// Executes the batch and returns all rows from the single result set.
+		/// </summary>
+		/// <param name="sql">The SQL statement to execute.</param>
 		/// <param name="parameters">Anonymous object providing parameters for the query.</param>
 		/// <param name="options">An optional set of query options</param>
 		public IList<dynamic> GetRows(string sql, object parameters = null, QueryOptions options = null)
@@ -51,6 +79,37 @@ namespace unQuery
 		public IList<T> GetRows<T>(string sql, object parameters = null, QueryOptions options = null)
 		{
 			return getRows<T>(sql, CommandBehavior.Default, parameters, options);
+		}
+
+		/// <summary>
+		/// Executes the batch and returns a single row of data. If more than one row is is returned from the database,
+		/// all but the first will be discarded.
+		/// </summary>
+		/// <param name="sql">The SQL statement to execute.</param>
+		/// <param name="options">An optional set of query options</param>
+		public dynamic GetRow(FormattableString sql, QueryOptions options = null)
+		{
+			var providedArguments = sql.GetArguments();
+			var parameters = CreateParametersObjectFromFormattableString(providedArguments);
+
+			using (var conn = getConnection())
+			using (var cmd = getCommand(string.Format(sql.Format, providedArguments), parameters, conn, options))
+			using (var reader = cmd.ExecuteReader(CommandBehavior.SingleRow))
+				return mapReaderRowsToObject(reader).FirstOrDefault();
+		}
+
+		/// <summary>
+		/// Executes the batch and returns a single row of data. If more than one row is is returned from the database,
+		/// all but the first will be discarded. The row will be mapped to the properties of the generic type.
+		/// </summary>
+		/// <param name="sql">The SQL statement to execute.</param>
+		/// <param name="options">An optional set of query options</param>
+		public T GetRow<T>(FormattableString sql, QueryOptions options = null) where T : new()
+		{
+			var providedArguments = sql.GetArguments();
+			var parameters = CreateParametersObjectFromFormattableString(providedArguments);
+
+			return getRows<T>(string.Format(sql.Format, providedArguments), CommandBehavior.SingleResult | CommandBehavior.SingleRow, parameters, options).FirstOrDefault();
 		}
 
 		/// <summary>
@@ -78,6 +137,20 @@ namespace unQuery
 		public T GetRow<T>(string sql, object parameters = null, QueryOptions options = null) where T : new()
 		{
 			return getRows<T>(sql, CommandBehavior.SingleResult | CommandBehavior.SingleRow, parameters, options).FirstOrDefault();
+		}
+
+		/// <summary>
+		/// Executes the batch, and returns the first column of the first row of the first result set returned by the query.
+		/// </summary>
+		/// <param name="sql">The SQL statement to execute.</param>
+		/// <param name="options">An optional set of query options</param>
+		/// <exception cref="NoRowsException" />
+		public T GetScalar<T>(FormattableString sql, QueryOptions options = null)
+		{
+			var providedArguments = sql.GetArguments();
+			var parameters = CreateParametersObjectFromFormattableString(providedArguments);
+
+			return GetScalar<T>(string.Format(sql.Format, providedArguments), parameters, options);
 		}
 
 		/// <summary>
@@ -366,6 +439,25 @@ namespace unQuery
 			}
 
 			return list;
+		}
+
+		/// <summary>
+		/// Creates a parameters object from a parameters array.
+		/// </summary>
+		/// <param name="providedArguments">The array of parameter objects that will be set as properties on the returned parameters object.</param>
+		/// <returns></returns>
+		private static ExpandoObject CreateParametersObjectFromFormattableString(object[] providedArguments)
+		{
+			var parameters = new ExpandoObject();
+			var parameterDictionary = (IDictionary<string, object>)parameters;
+			for (var i = 0; i < providedArguments.Length; i++)
+			{
+				var argumentKey = $"arg{i}";
+				providedArguments[i] = $"@{argumentKey}";
+				parameterDictionary.Add(argumentKey, providedArguments[i]);
+			}
+
+			return parameters;
 		}
 
 		/// <summary>
